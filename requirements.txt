@@ -1,0 +1,7 @@
+numpy>=1.24
+torch>=2.9.1
+torchvision>=0.24.1
+lightning>=2.2
+Pillow>=10
+open_clip_torch>=2.24
+scipy>=1.11

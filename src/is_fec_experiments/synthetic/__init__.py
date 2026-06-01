@@ -1,0 +1,1 @@
+"""Synthetic Bernoulli-channel experiments."""

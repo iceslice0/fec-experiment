@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "is-fec-experiments"
+version = "0.1.0"
+description = "Experiment scripts for the information-science FEC interpretation paper."
+readme = "README.md"
+license = "BSD-2-Clause"
+authors = [{ name = "Sergey Salishev" }]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "torch==2.9.1",
+    "torchvision==0.24.1",
+    "lightning>=2.2",
+    "Pillow>=10",
+    "open_clip_torch>=2.24",
+    "scipy>=1.11",
+]
+
+[project.scripts]
+is-fec-download-models = "is_fec_experiments.download_models:main"
+is-fec-bernoulli = "is_fec_experiments.synthetic.bernoulli_experiment:main"
+is-fec-extract-r2 = "is_fec_experiments.synthetic.extract_r2:main"
+is-fec-invert-imagenet = "is_fec_experiments.inversion.invert_batch_imagenet_val:main"
+is-fec-clip-montage-eval = "is_fec_experiments.inversion.clip_montage_eval:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

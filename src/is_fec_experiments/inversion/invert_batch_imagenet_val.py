@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-invert_regnet_imagenet.py
+invert_imagenet.py
 
-Invert ImageNet-1K samples from RegNet trunk-output features via gradient-based optimization.
+Invert ImageNet-1K samples from Torchvision model features via gradient-based optimization.
 Uses only conv/ReLU/skip/pool/linear layers. Saves original and reconstructed batches.
 """
 import argparse
+import json
 import os
 import random
 import torch
@@ -14,27 +15,16 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
-from torchvision import transforms, utils, models
+from torchvision import transforms, utils
 from torchvision.datasets import ImageNet
 
-from math import sqrt, pi, erf, inf
+from is_fec_experiments.model_registry import (
+    available_models,
+    get_feature_module,
+    load_model,
+)
 
-
-REGNET_MODELS = {
-    "regnet_x_3_2gf": (
-        models.regnet_x_3_2gf,
-        models.RegNet_X_3_2GF_Weights.DEFAULT,
-    ),
-    "regnet_y_3_2gf": (
-        models.regnet_y_3_2gf,
-        models.RegNet_Y_3_2GF_Weights.DEFAULT,
-    ),
-}
-
-
-def load_regnet_model(name: str):
-    factory, weights = REGNET_MODELS[name]
-    return factory(weights=weights)
+from math import sqrt, pi, erf, inf, isfinite
 
 
 def replace_relu_with_softplus(module: nn.Module, beta: float = 1.0, threshold: float = 20.0):
@@ -320,6 +310,48 @@ def compute_all_losses(
         loss_kl, loss_mse, loss_mean, loss_std, loss_tv, loss_l1,
         centering_loss, border_loss, total_loss, kl_ps,
     )
+
+
+def scalar_value(value):
+    if isinstance(value, torch.Tensor):
+        return float(value.detach().cpu().item())
+    return float(value)
+
+
+def summarize_tensor(values: torch.Tensor) -> dict:
+    values = values.detach().cpu().float().reshape(-1)
+    count = int(values.numel())
+    if count == 0:
+        return {"count": 0, "min": None, "max": None, "mean": None, "std": None}
+    return {
+        "count": count,
+        "min": float(values.min().item()),
+        "max": float(values.max().item()),
+        "mean": float(values.mean().item()),
+        "std": float(values.std(unbiased=False).item()) if count > 1 else 0.0,
+    }
+
+
+def json_safe(value):
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 1:
+            return json_safe(value.detach().cpu().item())
+        return json_safe(value.detach().cpu().tolist())
+    if isinstance(value, float) and not isfinite(value):
+        return str(value)
+    return value
+
+
+def write_metrics_json(metrics: dict, output_path: str) -> None:
+    parent = os.path.dirname(output_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(json_safe(metrics), f, indent=2, allow_nan=False)
 
 def denormalize_and_process(x, mean, std):
     """Denormalize tensor and apply post-processing"""
@@ -636,13 +668,13 @@ def ab_for_threshold(t: float):
 
 
 def main():
-    p = argparse.ArgumentParser(description='Invert RegNet features on ImageNet1K')
+    p = argparse.ArgumentParser(description='Invert Torchvision model features on ImageNet1K')
     p.add_argument('--data-dir', default='../data/imagenet', help='ImageNet root folder')
     p.add_argument(
         '--model',
         default='regnet_x_3_2gf',
-        choices=tuple(REGNET_MODELS),
-        help='Torchvision RegNet model to invert. Default: regnet_x_3_2gf',
+        choices=available_models(),
+        help='Torchvision model to invert. Default: regnet_x_3_2gf',
     )
     p.add_argument('--class-id', default='-1', type=str, help='ImageNet class index(es) - single int or comma-separated list (e.g., "0" or "0,1,2" or "-1" for all)')
     p.add_argument('--batch-size', type=int, default=48, help='Batch size')
@@ -659,7 +691,7 @@ def main():
     p.add_argument('--loss-p', type=float, default=1.0, help='L_p exponent for batch reduction of per-sample losses')
     p.add_argument('--subset-size', type=int, default=5000, help='Number of samples to take before filtering and sorting')
     p.add_argument('--threshold', type=float, default=None, help='Threshold for binarizing target_feat (values >= threshold become 1, else 0)')
-    p.add_argument('--select-best-n', type=int, default=inf, help='Select N samples with minimal total_loss to save at the end (default: save all)')
+    p.add_argument('--select-best-n', type=int, default=inf, help='Select N samples with minimal KL loss to save at the end (default: save all)')
     p.add_argument('--nrow', type=int, default=None, help='Grid row size for saved images (0=auto)')
     p.add_argument('--out', default='output', help='Output directory')
     args = p.parse_args()
@@ -681,8 +713,8 @@ def main():
 
     # 1. Load the inversion model. Torchvision downloads weights on first use.
     print(f"Model: {args.model}")
-    model = load_regnet_model(args.model)
-    features = model.trunk_output
+    model = load_model(args.model)
+    features = get_feature_module(model, args.model)
 
 
     # before
@@ -703,7 +735,7 @@ def main():
     activation = {}
     hooks = {}
 
-    # Hook trunk_output (pre-pool) features
+    # Hook target pre-pool features.
     def hook_fn(module, input, output):
         activation['feat'] = output
     hooks['feat'] = features.register_forward_hook(hook_fn)
@@ -736,14 +768,14 @@ def main():
         print(f"  Class {cid}: {class_counts.get(cid, 0)} images")
 
     # Teacher / validation model: pretrained ReLU (Softplus beta -> inf), never args.beta
-    model_cls = load_regnet_model(args.model).to(device).eval()
+    model_cls = load_model(args.model).to(device).eval()
     teacher_activation = {}
 
     def teacher_hook_fn(module, input, output):
         teacher_activation['feat'] = output
 
     teacher_hooks = {
-        'feat': model_cls.trunk_output.register_forward_hook(teacher_hook_fn),
+        'feat': get_feature_module(model_cls, args.model).register_forward_hook(teacher_hook_fn),
     }
 
     sorted_indices = filter_and_sort_by_confidence(
@@ -791,6 +823,15 @@ def main():
     # 5. Initialize reconstruction
     noise = torch.randn_like(imgs_norm) * args.sigma
     x = noise.requires_grad_(True)
+
+    with torch.no_grad():
+        initial_feat = forward_and_get_feat(model, x, activation)
+        initial_loss_kl, _, _, _, _, _, _, _, _, initial_loss_kl_per_sample = compute_all_losses(
+            initial_feat, target_feat, x, args.tv_weight,
+            l2_weight=args.l2_weight, mean_weight=args.mean_weight, std_weight=args.std_weight,
+            l1_weight=args.l1_weight, tv_loss_orig=tv_loss_orig, batch_norm_p=args.loss_p,
+        )
+    print(f"Initial KL before inversion: {initial_loss_kl.item():.4f}")
 
     opt = optim.Adam([x], lr=args.lr, betas=(0.9, 0.999))
     #opt = optim.SGD([x], lr=args.lr, momentum=0.9)
@@ -844,18 +885,33 @@ def main():
         
     
     # Print classification statistics
+    total_recon = len(all_true_labels)
+    classification_accuracy = correct_recon / total_recon if total_recon else 0.0
     print(f"\nClassification accuracy (all samples):")
-    print(f"  Reconstructed images: {correct_recon}/{len(all_true_labels)} ({100*correct_recon/len(all_true_labels):.1f}%)")
+    print(f"  Reconstructed images: {correct_recon}/{total_recon} ({100*classification_accuracy:.1f}%)")
     
+    per_class_accuracy = {}
+    for cid in sorted(set(all_true_labels.detach().cpu().tolist())):
+        cid = int(cid)
+        class_mask = (all_true_labels == cid)
+        class_correct = (preds_recon[class_mask] == all_true_labels[class_mask]).sum().item()
+        class_total = class_mask.sum().item()
+        per_class_accuracy[str(cid)] = {
+            "correct": int(class_correct),
+            "total": int(class_total),
+            "accuracy": float(class_correct / class_total) if class_total else 0.0,
+        }
+
     # Print per-class accuracy if multiple classes
     if len(class_ids) > 1 and class_ids[0] != -1:
         print(f"\nPer-class accuracy (reconstructed, all samples):")
         for cid in sorted(class_ids):
-            class_mask = (all_true_labels == cid)
-            if class_mask.sum() > 0:
-                class_correct = (preds_recon[class_mask] == all_true_labels[class_mask]).sum().item()
-                class_total = class_mask.sum().item()
-                print(f"  Class {cid}: {class_correct}/{class_total} ({100*class_correct/class_total:.1f}%)")
+            class_metrics = per_class_accuracy.get(str(cid))
+            if class_metrics is not None:
+                print(
+                    f"  Class {cid}: {class_metrics['correct']}/{class_metrics['total']} "
+                    f"({100*class_metrics['accuracy']:.1f}%)"
+                )
 
     # 7. Select best samples and save (only from correctly classified)
     with torch.no_grad():
@@ -864,10 +920,31 @@ def main():
         # Compute per-sample losses
         # Calculate per-sample TV loss for originals
         tv_loss_orig_per_sample = tv_loss(imgs_norm)
-        _, _, _, _, _, _, _, _, _, loss_kl_per_sample = compute_all_losses(
+        (
+            final_loss_kl, final_loss_mse, final_loss_mean, final_loss_std,
+            final_loss_tv, final_loss_l1, final_centering_loss,
+            final_border_loss, final_total_loss, loss_kl_per_sample,
+        ) = compute_all_losses(
             feat, target_feat, x, args.tv_weight,
             l2_weight=args.l2_weight, mean_weight=args.mean_weight, std_weight=args.std_weight,
             l1_weight=args.l1_weight, tv_loss_orig=tv_loss_orig_per_sample, batch_norm_p=args.loss_p,
+        )
+        feat_mean_mse_per_sample = (
+            feat.mean(dim=[1, 2, 3]) - target_feat.mean(dim=[1, 2, 3])
+        ).pow(2)
+        input_mean_per_sample, input_std_per_sample = input_norm_moments_per_sample(x)
+        tv_hinge_per_sample = torch.maximum(
+            tv_loss(x) - 0.4 * tv_loss_orig_per_sample,
+            torch.zeros_like(tv_loss_orig_per_sample),
+        )
+        gray_edge_per_sample_values = gray_edge_per_sample(x)
+        weighted_total_per_sample = (
+            loss_kl_per_sample
+            + args.l2_weight * feat_mean_mse_per_sample
+            + args.mean_weight * input_mean_per_sample
+            + args.std_weight * input_std_per_sample
+            + args.tv_weight * tv_hinge_per_sample
+            + args.l1_weight * gray_edge_per_sample_values
         )
         
         loss_per_sample = loss_kl_per_sample
@@ -910,8 +987,76 @@ def main():
         save_best_images(x_best, imgs_best, mean, std, args.out, class_id_str, nrow=args.nrow)
         
         # Print loss statistics
-        print(f"\nBest samples total_loss range: [{loss_per_sample[best_indices].min().item():.4f}, {loss_per_sample[best_indices].max().item():.4f}]")
-        print(f"Mean total_loss for best samples: {loss_per_sample[best_indices].mean().item():.4f}")
+        print(f"\nBest samples KL loss range: [{loss_per_sample[best_indices].min().item():.4f}, {loss_per_sample[best_indices].max().item():.4f}]")
+        print(f"Mean KL loss for best samples: {loss_per_sample[best_indices].mean().item():.4f}")
+        print(f"Mean weighted total loss for best samples: {weighted_total_per_sample[best_indices].mean().item():.4f}")
+
+        metrics_json_path = os.path.join(args.out, "metrics.json")
+        selected_true_labels = all_true_labels[best_indices]
+        selected_pred_labels = preds_recon[best_indices]
+        selected_correct_mask = selected_pred_labels == selected_true_labels
+        metrics = {
+            "model": args.model,
+            "output_dir": args.out,
+            "class_ids": class_ids,
+            "class_slug": class_id_str,
+            "data_dir": args.data_dir,
+            "args": vars(args),
+            "sample_counts": {
+                "candidate_indices": int(len(indices)),
+                "filtered_correctly_classified_indices": int(len(sorted_indices)),
+                "batch_size": int(len(imgs)),
+                "selected_best": int(len(best_indices)),
+            },
+            "classification": {
+                "correct": int(correct_recon),
+                "total": int(total_recon),
+                "accuracy": float(classification_accuracy),
+                "correct_batch_indices": [int(i) for i in correct_indices],
+                "true_labels": [int(v) for v in all_true_labels.detach().cpu().tolist()],
+                "predicted_labels": [int(v) for v in preds_recon.detach().cpu().tolist()],
+                "per_class": per_class_accuracy,
+            },
+            "initial_losses": {
+                "kl": scalar_value(initial_loss_kl),
+            },
+            "final_losses": {
+                "kl": scalar_value(final_loss_kl),
+                "feature_mean_mse": scalar_value(final_loss_mse),
+                "input_mean": scalar_value(final_loss_mean),
+                "input_std": scalar_value(final_loss_std),
+                "tv": scalar_value(final_loss_tv),
+                "gray_edge": scalar_value(final_loss_l1),
+                "centering": scalar_value(final_centering_loss),
+                "border": scalar_value(final_border_loss),
+                "total": scalar_value(final_total_loss),
+            },
+            "initial_per_sample_loss_summaries": {
+                "kl": summarize_tensor(initial_loss_kl_per_sample),
+            },
+            "per_sample_loss_summaries": {
+                "kl": summarize_tensor(loss_kl_per_sample),
+                "feature_mean_mse_unweighted": summarize_tensor(feat_mean_mse_per_sample),
+                "input_mean_unweighted": summarize_tensor(input_mean_per_sample),
+                "input_std_unweighted": summarize_tensor(input_std_per_sample),
+                "tv_hinge_unweighted": summarize_tensor(tv_hinge_per_sample),
+                "gray_edge_unweighted": summarize_tensor(gray_edge_per_sample_values),
+                "weighted_total": summarize_tensor(weighted_total_per_sample),
+            },
+            "selected_best": {
+                "batch_indices": [int(i) for i in best_indices],
+                "dataset_indices": [int(sorted_indices[i]) for i in best_indices],
+                "true_labels": [int(v) for v in selected_true_labels.detach().cpu().tolist()],
+                "predicted_labels": [int(v) for v in selected_pred_labels.detach().cpu().tolist()],
+                "correct": int(selected_correct_mask.sum().item()),
+                "total": int(len(best_indices)),
+                "accuracy": float(selected_correct_mask.float().mean().item()) if best_indices else 0.0,
+                "kl_summary": summarize_tensor(loss_kl_per_sample[best_indices]),
+                "weighted_total_summary": summarize_tensor(weighted_total_per_sample[best_indices]),
+            },
+        }
+        write_metrics_json(metrics, metrics_json_path)
+        print(f"Wrote metrics JSON: {metrics_json_path}")
 
     for h in hooks.values():
         h.remove()

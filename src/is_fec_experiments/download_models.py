@@ -6,8 +6,8 @@ from __future__ import annotations
 import argparse
 
 from is_fec_experiments.model_registry import (
-    available_regnet_models,
-    load_regnet_model,
+    available_models,
+    load_model,
 )
 
 
@@ -16,10 +16,12 @@ def main(argv: list[str] | None = None) -> None:
         description="Download/cache pretrained Torchvision and OpenCLIP models."
     )
     parser.add_argument(
+        "--model",
         "--regnet-model",
+        dest="model",
         default="regnet_x_3_2gf",
-        choices=available_regnet_models(),
-        help="Torchvision RegNet model to cache. Default: regnet_x_3_2gf.",
+        choices=available_models(),
+        help="Torchvision model to cache. Default: regnet_x_3_2gf.",
     )
     parser.add_argument(
         "--clip-model",
@@ -32,9 +34,11 @@ def main(argv: list[str] | None = None) -> None:
         help="OpenCLIP pretrained weights tag. Default: openai.",
     )
     parser.add_argument(
+        "--skip-torchvision",
         "--skip-regnet",
+        dest="skip_torchvision",
         action="store_true",
-        help="Do not download Torchvision RegNet weights.",
+        help="Do not download Torchvision model weights.",
     )
     parser.add_argument(
         "--skip-clip",
@@ -43,9 +47,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    if not args.skip_regnet:
-        print(f"Caching Torchvision model: {args.regnet_model}")
-        model = load_regnet_model(args.regnet_model)
+    if not args.skip_torchvision:
+        print(f"Caching Torchvision model: {args.model}")
+        model = load_model(args.model)
         model.eval()
         print("Torchvision model cached.")
 

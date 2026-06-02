@@ -73,6 +73,30 @@ Outputs are written under `outputs/synthetic`, model-specific `outputs/inversion
 
 Inversion runs also write final metrics, initial KL, and classification accuracy to `metrics.json` in the inversion output directory.
 
+## Inversion Overview
+
+The table below summarizes the current 48-image inversion runs from `outputs/inversion48/<model>/metrics.json` and normalized CLIP montage results from `outputs/clip48/<model>/clip_montage_metrics.json`; models without both files are omitted.
+
+`Inv acc` is reconstructed-image top-1 classifier accuracy from the inversion model family. `KL before` and `KL after` are the average symmetric KL values recorded before optimization and at the final reconstruction. CLIP columns use the row/column-normalized `S_norm` block: top-1/top-5 retrieval recall, mean matched similarity, and mean random mismatched similarity.
+
+| Model | Inv acc | KL before | KL after | CLIP top-1 | CLIP top-5 | CLIP matched | CLIP mismatch |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `regnet_x_400mf` | 95.8% | 224.80 | 7.74 | 33.3% | 72.9% | 0.662 | 0.605 |
+| `regnet_y_400mf` | 93.8% | 262.62 | 12.13 | 31.2% | 56.2% | 0.672 | 0.613 |
+| `regnet_x_800mf` | 91.7% | 257.03 | 26.50 | 33.3% | 52.1% | 0.678 | 0.623 |
+| `regnet_y_800mf` | 100.0% | 343.05 | 14.57 | 31.2% | 66.7% | 0.626 | 0.587 |
+| `regnet_x_1_6gf` | 97.9% | 243.25 | 22.92 | 27.1% | 75.0% | 0.660 | 0.612 |
+| `regnet_y_1_6gf` | 97.9% | 243.96 | 17.37 | 31.2% | 47.9% | 0.639 | 0.607 |
+| `regnet_x_3_2gf` | 100.0% | 234.93 | 16.00 | 43.8% | 56.2% | 0.658 | 0.603 |
+| `regnet_y_3_2gf` | 97.9% | 230.04 | 12.77 | 22.9% | 58.3% | 0.612 | 0.576 |
+| `regnet_x_8gf` | 83.3% | 224.15 | 56.10 | 33.3% | 68.8% | 0.639 | 0.597 |
+| `regnet_y_8gf` | 89.6% | 193.35 | 27.12 | 8.3% | 50.0% | 0.612 | 0.584 |
+| `resnet18` | 10.4% | 412.46 | 160.66 | 6.2% | 25.0% | 0.553 | 0.545 |
+| `resnet34` | 0.0% | 1001.83 | 870.37 | 0.0% | 8.3% | 0.539 | 0.538 |
+| `resnet50` | 93.8% | 226.96 | 36.75 | 29.2% | 58.3% | 0.640 | 0.597 |
+| `resnet101` | 75.0% | 250.69 | 79.55 | 14.6% | 39.6% | 0.618 | 0.589 |
+| `resnet152` | 85.4% | 218.18 | 56.39 | 20.8% | 45.8% | 0.624 | 0.588 |
+
 ## Smoke Check
 
 For a fast local check that does not download models or require ImageNet:

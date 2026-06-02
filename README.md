@@ -69,7 +69,7 @@ make experiment-clip MONTAGE=outputs/inversion/regnet_x_3_2gf/best_orig_vs_recon
 
 Each model has separate `experiment-inversion-<model>`, `experiment-inversion48-<model>`, `experiment-clip-<model>`, and `experiment-clip48-<model>` targets.
 
-Outputs are written under `outputs/synthetic`, model-specific `outputs/inversion/<model>`, `outputs/inversion48/<model>`, `outputs/clip/<model>`, and `outputs/clip48/<model>`.
+Outputs are written under `outputs/synthetic`, model-specific `outputs/inversion/<model>`, `outputs/inversion48/<model>`, `outputs/clip/<model>`, and `outputs/clip48/<model>`. Synthetic codebooks are saved under `outputs/synthetic/codebooks` as CSV files with one row per class codeword.
 
 Inversion runs also write final metrics, initial KL, and classification accuracy to `metrics.json` in the inversion output directory.
 

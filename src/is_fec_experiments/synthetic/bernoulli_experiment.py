@@ -1,5 +1,7 @@
 import argparse
+import csv
 import math
+from pathlib import Path
 from typing import Tuple, Optional
 
 import numpy as np
@@ -58,14 +60,20 @@ def sample_codebook(
     if len(codebook) < total_codewords:
         raise RuntimeError("Failed to sample codebook with required minimum distance")
     codebook_arr = np.stack(codebook, axis=0)  # [total_codewords, n]
-    # Report actual d_min
+    # Report actual pairwise distance statistics.
     d_min = math.inf
+    d_sum = 0
+    d_count = 0
     for i in range(total_codewords):
         for j in range(i + 1, total_codewords):
             d = hamming_distance(codebook_arr[i], codebook_arr[j])
             d_min = min(d_min, d)
+            d_sum += d
+            d_count += 1
+    d_avg = d_sum / d_count if d_count else 0.0
     if verbose:
         print(f"Sampled codebook with d_min = {d_min} ({d_min/n:.3f} * n)")
+        print(f"Sampled codebook with d_avg = {d_avg:.6f} ({d_avg/n:.3f} * n)")
     return codebook_arr
 
 
@@ -117,6 +125,43 @@ def cluster_codebook(
         [codebook[np.array(cluster, dtype=np.int64)] for cluster in clusters], axis=0
     )  # [num_classes, codewords_per_class, n]
     return grouped
+
+
+def save_codebook(path: str | Path, codebook: np.ndarray, args) -> None:
+    """Save the clustered codebook as one CSV row per class codeword."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bit_fields = [f"bit_{j:04d}" for j in range(args.n)]
+    fieldnames = [
+        "C",
+        "m",
+        "n",
+        "q",
+        "min_dist_frac",
+        "seed",
+        "class_id",
+        "codeword_id",
+        *bit_fields,
+    ]
+
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for class_id in range(args.C):
+            for codeword_id in range(args.m):
+                bits = codebook[class_id, codeword_id].astype(np.int8, copy=False)
+                row = {
+                    "C": args.C,
+                    "m": args.m,
+                    "n": args.n,
+                    "q": args.q,
+                    "min_dist_frac": args.min_dist_frac,
+                    "seed": args.seed,
+                    "class_id": class_id,
+                    "codeword_id": codeword_id,
+                }
+                row.update({field: int(bit) for field, bit in zip(bit_fields, bits)})
+                writer.writerow(row)
 
 
 # --------------------------------------------------------------------
@@ -609,6 +654,11 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gpus", type=int, default=1,
                         help="number of GPUs to use (0 for CPU)")
+    parser.add_argument(
+        "--codebook-out",
+        default=None,
+        help="Optional CSV path for saving the sampled and clustered codebook.",
+    )
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -626,6 +676,9 @@ def main():
         f"{args.C} classes with {args.m} codewords each"
     )
     codebook = cluster_codebook(flat_codebook, args.C, args.m)
+    if args.codebook_out:
+        save_codebook(args.codebook_out, codebook, args)
+        print(f"Saved codebook: {args.codebook_out}")
 
     device = torch.device(
         "cuda" if args.gpus > 0 and torch.cuda.is_available() else "cpu"
